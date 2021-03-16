@@ -1,0 +1,67 @@
+﻿//Script GUID:7ba0e745-670c-459f-911b-1f4bf138492c
+//Used for tracking history
+/*
+<Owerview>
+Script to extract some useful info from NRT (near real time log) stored in COSMOS here
+https://aad.cosmos09.osdinfra.net/cosmos/UDC/local/Personalization/MsnFeedback/Events/2020/07/Structured-RawEpEventsLog-2020-07-01.ss?property=info
+or from MSN.DnI 
+https://cosmos09.osdinfra.net:443/cosmos/MSN.DnI/shares/UDC/Personalization/MsnFeedback/Events/2020/07/Structured-RawEpEventsLog-2020-07-01.ss?property=info
+PayLoad	string
+EventType	string
+SubEventType	string
+ActivityId	string
+AreaOfPage	string
+PartnerName	string
+TargetId	string
+TargetType	string
+YPos	string
+Layout	string
+UserId	string
+IdType	string
+EventDateTime	string
+Canvas	string
+UserAgent	string
+FlightId	string
+Market	string
+PageType	string
+PageName	string
+Headline	string
+HeadlineHash	string
+AbFlags	string
+Lineage	string
+LineageOrdinal	string
+            Here PayLoad - has everything that next columns have, but in json format. Next column duplicate info, we need just few of them:
+TargetId = docId, like "BB16aCWa"
+EventDateTime like "6/30/2020 11:59:55 PM" - to select events from time window
+Headline like "Weak Apple 5G iPhone shipments: Report"
+
+So we select those columns and write tha into separate file for processing (csv ot tsv probably)
+Note: data is stored on UDC VC! But job should be submitted on MSN.DnI. And from MSN.DnI path will be
+/shares/UDC/Personalization/MsnFeedback/Events/
+To switch clusters:
+goto Extensions-Scope-VC selector, Cluster= cosmos09, VC=UDC
+*/
+
+
+#DECLARE streamExpiry string = "30";
+#DECLARE date string = "2020-07-01";  //date of interest
+//input
+#DECLARE msnfeedbacklog string =  string.Format("/shares/UDC/Personalization/MsnFeedback/Events/%Y/%m/Structured-RawEpEventsLog-%Y-%m-%d.ss?date=") + @date; 
+//like /shares/UDC/Personalization/MsnFeedback/Events/2020/07/Structured-RawEpEventsLog-2020-07-01.ss
+
+//output should be in tsv, csv
+#DECLARE msnfeedbacklogextract string =  string.Format("/shares/UDC/RnR/Users/v-letols/msnfeedbacklogextract-%Y%m%d.tsv?date=") + @date;
+
+sslog = SSTREAM @msnfeedbacklog; // msnfeedbacklog is a structured stram already
+extr =
+    SELECT 
+        TargetId,
+        EventDateTime,
+        Headline
+    FROM sslog
+    WHERE ((EventType == "Event.Click") 
+    && (Market == "en-us")
+    && (TargetId.StartsWith("B") || TargetId.StartsWith("A") ) ) ; // to exclude garbage
+
+OUTPUT extr TO @msnfeedbacklogextract
+   WITH STREAMEXPIRY @streamExpiry;
