@@ -1,0 +1,262 @@
+﻿//Script GUID:0fd5f5e7-0734-4add-a43f-a328c115fc96
+//Used for tracking history
+
+//Script GUID:0db8ce8a-8613-45fd-99c7-0efb68d876c1
+//Used for tracking history
+/*<Overview>
+This script is copied from https://aad.cosmos09.osdinfra.net/cosmos/MSN.DnI/_jobs/fa6dc379-1085-4d83-9583-f0c6235949de
+For Saheli.
+    get a separate table called nonnav clicks & output it...I don't know what info the nonnav clicks have...will need to look & modify 
+Comparing shemas for ss files stored in "shares/UDC/RnR/HourlyExpL1Cooked/" and in "shares/UDC/RnR/HourlyExpL1CookedV2/" to see if nonnav clicks can be obtained from v2 files: need UserAction column
+        ...Cooked:                              ...CookedV2:
+Column Name	Type                        Column Name	Type
+UserId	string                          UserId	string
+IdType	string                          IdType	string
+RequestId	string                      RequestId	string
+SessionId	string                      SessionId	string
+ContentId	string                      ContentId	string
+Idx	string                              Idx	string
+ContentModule	string                  ContentModule	string
+ContentModuleLineage	string          ContentModuleLineage	string
+ContentRankInModule	int?                ContentRankInModule	int?
+OrdinalLineage	string                  OrdinalLineage	string
+InventoryType	string                  InventoryType	string
+ContentSource	string                  ContentSource	string
+Vertical	string                      Vertical	string
+SubVertical	string                      SubVertical	string
+FeedId	string                          FeedId	string
+ModuleType	string                      ModuleType	string
+MUIDAge	int?                            MUIDAge	int?
+Market	string                          Market	string
+RegionName	string                      RegionName	string
+CountryName	string                      CountryName	string
+Device	string                          Device	string
+IsInternal	int?                        IsInternal	int?
+IsTest	int?                            IsTest	int?
+IsBot	int?                            IsBot	int?
+Canvas	string                          Canvas	string
+Product	string                          Product	string
+PageContentId	string                  PageContentId	string
+PageType	string                      PageType	string
+PageName	string                      PageName	string
+ExperimentFlightId	string              ExperimentFlightId	string
+FDCountry	string                      
+FDState	string                          
+FDTimezone	string                      
+PageViewDateTime	DateTime?           PageViewDateTime	DateTime?
+PageDwellTime	double?                 PageDwellTime	double?
+IsClicked	int                         IsClicked	int
+ClickDateTime	DateTime?               ClickDateTime	DateTime?
+ClickDwellTime	double?                 ClickDwellTime	double?
+CLUSTERED BY: UserId, SessionId         CLUSTERED BY: UserId, SessionId
+
+
+        UserAction comes from https://aad.cosmos09.osdinfra.net/cosmos/MSN.DnI/shares/MSN.Data/Prod09/PipeV2/Processed/EXPL1/Daily/
+        via view in "/shares/MSN.Data/Prod09/PipeV2/Processed/Views/EXPL1Hourly.view" - search var
+Schema for files:
+Column Name	Type
+ProcessDateTime	DateTime?           Canvas	string                         ContentType	string                InstallSource	string                  FDmsnExperimentFlightAssignmentHash	string     IsCompass	string
+EventDateTime	DateTime            Product	string                         ContentID	string                LaunchSource	string                  FDDataCenter	string                         EdgeFilterMap	string
+RequestId	string                  IsJavaScriptEnabled	int?               ContentSource	string            AppVersion	string                  FDStatus	long?                              PayloadId	string
+ConnectionMode	int                 IsAutoRefresh	int?                   ContentProviderID	string        TimeToOnload	int?                    FDRevIP	string                                 Edgscpfull	bool?
+UserAgent	string                  IsCorePV	int?                       ContentProvider	string            TimeToDomComplete	int?                FDLBFromAs	ulong?                             Edgscpguard	bool?
+IsInternal	int?                    IsStatic	int?                       ContentProviderBrandID	string    TimeToFirstByte	int?                FDFBFromAs	ulong?                             Edgscpver	int?
+IsTest	int?                        HasAdBlocker	int?                   ContentProviderBrand	string        TimeToInfopaneInteractive	int?        FDFBToAs	ulong?                             BingSegMarket	string
+UserMUID	string                  Has3PSearch	int?                       ContentHeadline	string            TTVS	int?                            FDFBResponse	ulong?                         BingFlightId	string
+IsUserSignedIn	int                 PageLayout	string                     ContentModule	string            PlayerLoaded	int?                    FDFBRequest	ulong?                             BingPayloadIdEndTime	DateTime?
+MUIDAge	int                         PageType	string                     ContentModuleLineage	string        AdManagerLoadStart	int?            FDLBResponse	ulong?                         CLUSTERED BY: RequestId, UserMUID
+IsMUIDStable	int                 PageName	string                     ContentPosition	string            AdManagerLoaded	int?                FDLBRequest	ulong?                             SORTED BY: RequestId, U
+EngagementValue	int?                PagePivot	string                     DestinationUrl	string            AdPlayerInit	int?                    OutgoingTTLB	long?
+HasAAD	int                         PageSettings	string                 Action	string                    AdRequestStart	int?                OutgoingTTFB	long?
+TrackingCode	string              PageVertical	string                 Behavior	string                    AdRequestComplete	int?                IncomingTTLB	long?
+OCID	string                      PageDepartment	string                 UserAction	string                AdSlotPlayStart	int?                IncomingTTFB	long?
+OCIDL1	string                      PageSubDepartment	string             ExperimentFlightId	string        IsAdTimeOut	bool?                   FDResponseBytes	long?
+OCIDL2	string                      PageFeedID	string                     PageTemplate	string                Markers	string                      NewsPlatform	string
+Referrer	string                  PageFeedName	string                 ActivityID	string                E1	string                          EdgEtag	string
+Market	string                      PageFeedType	string                 ExternalFlightID	string            EventName	string                      EdgId	string
+RegionName	string                  PageContentID	string                 PageSequenceID	string            LocalId	string                      EdgChannel	string
+CountryName	string                  PageContentProviderID	string         SessionId	string                FDmsnMarket	string                  ecs_record_timestamp	DateTime?
+Browser	string                      PageContentProvider	string             PartnerJoinID	string            FDmsnIsFirstSession	string          ecs_receipt_timestamp	DateTime?
+BrowserVersion	string              PageContentProviderBrandID	string     PropertyBag	string                FDmsnIsInternalTraffic	string      ecs_filter_values_channel	string
+Device	string                      PageContentProviderBrand	string     CustomPropertyBag	string        FDmsnEdgeIsMobileDevice	string      ecs_filter_values	string
+OSName	string                      PageContentTitle	string             IsBot	int?                      FDmsnEdgeDeviceBrowser	string      ecs_config_id_list	string
+OSVersion	string                  ContentVertical	string                 IsContentPV	int?                  FDmsnEdgeBrowserMajorVersion	string  ext_location_country	string
+OSMarket	string                  ContentDepartment	string             IgnoreEvent	int?                  FDmsnEdgeBrowserFamily	string      region	string
+OSLocale	string                  ContentSubDepartment	string         ActionType	int?                  FDmsnEdgeMarket	string              app_build_number	string
+OSRegion	string                  ContentFeedID	string                 ContentPageLayout	string        FDmsnTenantVersion	string          system_profile_msedge_experimentation	string
+OSReleaseVersion	string          ContentFeedName	string                 PageContentLayout	string        FDmsnExperimentFactorID	string      EdgeOSName	string
+OSBuildNumber	int?                ContentFeedType	string                 EventTimeElapsed	double?           FDmsnExperimentFlightID	string      FDRequestUrl	string
+
+
+Can we use logsStream "shares/UDC/RnR/HourlyExpL1Cooked" or "...V2" instead of search (from view )? logsStream data doesn't have UserAction column, how to find OnsiteNavClick or NonNavClick data then?
+
+From what we select for msnHourly:
+UserMUID,  UserAction, RequestId, SessionId, ActivityID, EventDateTime, ContentModule, ContentModuleLineage, 
+ContentID, ContentHeadline, CustomPropertyBag, ExperimentFlightId, Market, Action, IsInternal, IsTest, PageType, 
+
+most is available in logsStream:
+UserId,               ,RequestId, SessionId,           ,              , ContentModule, ContentModuleLineage, 
+ContentID,                ,                  , ExperimentFlightId, Market,       , IsInternal, IsTest, PageType
+but missing is important UserAction column as we are filtering by it, so can't use logsStream.
+
+
+Regarding PivotHover - it's in ContentModuleLineage column, so it's present in both, logsStream and search
+
+So keep using EXPL1Hourly.view for UserAction and PivotHover (as logsSteam doesn't have UserAction).
+v3- 11/23/2020 - use nav and non-nav clicks, and pivot - fails with
+    Error while evaluating expression UserAction == "OnsiteNavClick"
+    && (ExperimentFlightId.Contains(@"1s-brsageipsc") || ExperimentFlightId.Contains(@"1s-brsageipscc"))
+    Inner exception from user expression: Object reference not set to an instance of an object.
+    Current row dump: 	ContentID:	
+	ContentHeadline:	
+	ContentModule:	
+	ContentModuleLineage:	"main>today.Hero>infopane_a>mosaic>HeadlineItemViewModel"
+	UserAction:	"OnsiteNavClick"
+	ExperimentFlightId:	
+	PageType:	
+    ==== Caught exception System.NullReferenceException
+    Object reference not set to an instance of an object.
+   at ___Scope_Generated_Classes___.ScopeSplitOutputter_2.EvaluateTransform(Row inputRow, Row outputRow) in D:\data\CCS\Compilations\f00d126b-a58c-4e7d-b57d-127358ac2f14_v0\__ScopeCodeGen__.dll.cs:line 5259
+ and It's failing because ExperimentFlightId is empty, need to add a check for string null or empty for ExperimentFlightId (ll 172-175)
+
+v4 - 11/24/2020 - use only non-nav clicks, looks like it works better 
+v5 - 11/24/2020 Use for another flights: "The 2 treatments are “1s-brsageipts”, “1s-brsageipts2” and the control is “1s-brsageiptsc”. The market is en-us. You can use dates 11/21/2020 to 11/23/2020".
+*/
+
+MODULE "/shares/PXSCosmos09.Prod/PXS.DeleteSignal.Prod/PrivacyAnnotation/PrivacyAnnotation.module";
+USING Privacy;
+
+
+//#DECLARE longTailInput string = DateTime.UtcNow.ToString(); 
+#DECLARE startDateTime string = "2020-11-21";
+#DECLARE endDateTime string = "2020-11-23";
+#DECLARE flightId1 string = "1s-brsageipts2";
+#DECLARE flightId2 string = "1s-brsageiptsc"; 
+#DECLARE streamExpiry string = "25";
+//#DECLARE outputSS string= string.Format("/shares/UDC/RnR/Users/sahelid/ipsc/ContentModule/jointest_fromcooked.ss");
+//#DECLARE outputTSV string= string.Format("/shares/UDC/RnR/Users/sahelid/ipsc/ContentModule/jointest_fromcooked.tsv");
+//#DECLARE snippetSS string= string.Format("/shares/UDC/RnR/Users/sahelid/ipsc/ContentModule/examples.ss");
+//#DECLARE snippetTSV string= string.Format("/shares/UDC/RnR/Users/sahelid/ipsc/ContentModule/examples.tsv");
+#DECLARE output_nn_SS string= string.Format("/shares/UDC/RnR/Users/v-letols/test_script/out_nn_{0}_vs_{1}_from_{2}_to_{3}.ss",@flightId1, @flightId2, @startDateTime,@endDateTime);  //not-nav clicks stat
+#DECLARE output_nn_TSV string= string.Format("/shares/UDC/RnR/Users/v-letols/test_script/out_nn_{0}_vs_{1}_from_{2}_to_{3}.tsv",@flightId1, @flightId2, @startDateTime,@endDateTime);
+#DECLARE output_nav_SS string= string.Format("/shares/UDC/RnR/Users/v-letols/test_script/out_nav_{0}_vs_{1}_from_{2}_to_{3}.ss",@flightId1, @flightId2, @startDateTime,@endDateTime); //nav clicks stat
+#DECLARE output_nav_TSV string= string.Format("/shares/UDC/RnR/Users/v-letols/test_script/out_nav_{0}_vs_{1}_from_{2}_to_{3}.tsv",@flightId1, @flightId2, @startDateTime,@endDateTime);
+#DECLARE snippetSS string= string.Format("/shares/UDC/RnR/Users/v-letols/test_script/pivot_{0}_vs_{1}_from_{2}_to_{3}.ss",@flightId1, @flightId2, @startDateTime,@endDateTime); // pivot related output
+#DECLARE snippetTSV string= string.Format("/shares/UDC/RnR/Users/v-letols/test_script/pivot_{0}_vs_{1}_from_{2}_to_{3}.tsv",@flightId1, @flightId2, @startDateTime,@endDateTime);
+#DECLARE cmsStream string = "/shares/UDC/RnR/DailyCMSUpdate/%Y/%m/DailyCMS_%Y_%m_%d.ss?date=" + @endDateTime;
+
+
+// Using EXPL1Hourly.view for input
+search = 
+VIEW "/shares/MSN.Data/Prod09/PipeV2/Processed/Views/EXPL1Hourly.view"
+PARAMS
+(
+startDate = @startDateTime,
+endDate = @endDateTime,
+rootFolder = "/shares/MSN.Data/Prod09/PipeV2/Processed/EXPL1/Daily/",
+filename = string.Empty,
+IgnoreEvent = "0"
+);
+
+msnHourly = SELECT  UserMUID,  UserAction, RequestId, SessionId, ActivityID, EventDateTime, ContentModule, ContentModuleLineage, 
+                    ContentID, ContentHeadline, CustomPropertyBag, ExperimentFlightId, Market, Action, IsInternal, IsTest, PageType
+            FROM search
+           WHERE Market == "en-US" AND PageType IN ("dhp", "ntp", "hp");
+
+
+clicks_nn =   //not-navigation clicks
+    SELECT *,
+           IF(ExperimentFlightId.Contains(@flightId2), "control", IF(ExperimentFlightId.Contains(@flightId1), "treatment", "others")) AS flight
+    FROM msnHourly
+    WHERE UserAction == "NonNavClick"
+ AND (ExperimentFlightId.Contains(@flightId1) || ExperimentFlightId.Contains(@flightId2));
+
+clicks_nav =   //navigation clicks where ExperimentFlightId is not null or empty
+    SELECT * 
+    FROM msnHourly
+    WHERE !string.IsNullOrEmpty(ExperimentFlightId) ;
+
+clicks_nav =   //navigation clicks
+    SELECT *,
+           IF(ExperimentFlightId.Contains(@flightId2), "control", IF(ExperimentFlightId.Contains(@flightId1), "treatment", "others")) AS flight
+    FROM clicks_nav
+    WHERE UserAction == "OnsiteNavClick"
+ AND (ExperimentFlightId.Contains(@flightId1) || ExperimentFlightId.Contains(@flightId2));
+
+
+//Non-navigational clicks processing
+stats_nn = SELECT flight,
+           ContentModule,
+           ContentModuleLineage,
+           PageType,
+           COUNT(*) AS Total
+    FROM clicks_nn
+    GROUP BY flight, ContentModule, ContentModuleLineage, PageType;
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT stats_nn TO SSTREAM @output_nn_SS WITH STREAMEXPIRY @streamExpiry;
+[Privacy.Asset.NonPersonal]
+OUTPUT stats_nn TO @output_nn_TSV WITH STREAMEXPIRY @streamExpiry USING DefaultTextOutputter(outputHeader : true);
+
+
+
+//Navigational clicks processing
+stats_nav =
+    SELECT flight,
+           ContentModule,
+           ContentModuleLineage,
+           PageType,
+           COUNT(*) AS Total
+    FROM clicks_nav
+    GROUP BY flight, ContentModule, ContentModuleLineage, PageType;
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT stats_nav TO SSTREAM @output_nav_SS WITH STREAMEXPIRY @streamExpiry;
+[Privacy.Asset.NonPersonal]
+OUTPUT stats_nav TO @output_nav_TSV WITH STREAMEXPIRY @streamExpiry USING DefaultTextOutputter(outputHeader : true);
+
+
+// Now work with pivot data
+snippet =
+    SELECT PageType,
+           ContentID,
+           ContentHeadline,
+           flight,
+           ContentModule,
+           ContentModuleLineage
+    FROM clicks_nav 
+    WHERE !string.IsNullOrEmpty(ContentModuleLineage) AND (ContentModuleLineage.Contains("PivotsNav") || ContentModuleLineage.Contains("EdgeHeader") || 
+          ContentModuleLineage.ToLower().Contains("trendingnow") || ContentModuleLineage.Contains("PivotHover"));
+
+
+cmsData = SSTREAM @cmsStream;
+
+cmsData =
+    SELECT documentId,
+           title
+    FROM cmsData;
+
+snippet =
+    SELECT snippet.*,
+           cmsData.title
+    FROM snippet
+         LEFT OUTER JOIN cmsData
+         ON snippet.ContentID == cmsData.documentId;
+
+snippet =
+    SELECT PageType,
+           ContentID,
+           (string.IsNullOrEmpty(ContentHeadline) ? title : ContentHeadline) AS ContentHeadline,
+           flight,
+           ContentModule,
+           ContentModuleLineage
+    FROM snippet;
+
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT snippet TO SSTREAM @snippetSS WITH STREAMEXPIRY @streamExpiry;
+[Privacy.Asset.NonPersonal]
+OUTPUT snippet TO  @snippetTSV WITH STREAMEXPIRY @streamExpiry USING DefaultTextOutputter(outputHeader : true);
