@@ -1,0 +1,515 @@
+﻿//Script GUID:39f3fdf0-3468-40ad-ae34-3d5e3fc17ff6
+//Used for tracking history
+/* <Overview>
+This is a modification of the script FlightAanlysis.script
+https://microsoft.visualstudio.com/Universal%20Store/_git/CoreRanker?path=%2Fsrc%2FAetherModules%2FFlightAnalysis%2FFlightAanlysis.script
+Need to add providerId, BrandAuthority value for each contentId
+
+The 2 treatments are “1s-brsageipts”, “1s-brsageipts2” and the control is “1s-brsageiptsc”. The market is en-us. You can use dates 11/21/2020 to 11/23/2020.
+You can use this script - https://microsoft.visualstudio.com/Universal%20Store/_git/CoreRanker?path=%2Fsrc%2FAetherModules%2FFlightAnalysis%2FFlightAanlysis.script.
+We want to find out if the extra clicks coming in the treatment is coming from good publishers. In the above script, when you join with the cms data you can also get the providerId.
+And in the data below there is a BrandAuthority value for each contentId 
+https://aad.cosmos09.osdinfra.net/cosmos/MSN.DnI/shares/IndexServePlatform/RecoDataDump/20201121/NewsFeedsColumnExtentDump.tsv 
+    -what is a schema? BrandAuthority is there , but in json part...
+1.	Get the clicks distribution for treatments & control as a function of the providerIds
+2.	Get the clicks distribution for treatments & control as a function of BrandAuthority.
+
+DailyCMS_x_x_x.ss schema:
+documentId	string
+providerId	string
+document	string
+vector	string
+vectorDim	int?
+vectorSource	string
+bagOfWords	string
+textDssm	string
+dssmDim	int?
+dssmSource	string
+type	string
+locale	string
+vert	string
+subVert	string
+labelScore	string
+title	string
+body	string
+url	string
+displayPublishedDateTime	string
+lastPublishedDateTime	string
+vectorMap	Microsoft.SCOPE.Types.ScopeMap_x003C_System.String_x002C__x0020_System.String_x003E_
+headlineImageIds	string
+allMktsVectorMap	Microsoft.SCOPE.Types.ScopeMap_x003C_System.String_x002C__x0020_System.String_x003E_
+updated	int
+
+
+Submit with 
+startDate=(\"2020-11-21\"),endDate=(\"2020-11-23\")
+v3 - 11/30/2020 - use ControlVsTreatmentSelectedTSV_root_short as a short version of output, for "Get the clicks distribution for treatments & control as a function of the providerIds"
+v4 - 11/30/2020 - add "Get the clicks distribution for treatments & control as a function of BrandAuthority." part - here I need ItemFeatureProcessor PROCESSOR for 
+    json parts of https://aad.cosmos09.osdinfra.net/cosmos/MSN.DnI/shares/IndexServePlatform/RecoDataDump/20201121/NewsFeedsColumnExtentDump.tsv 
+    from old Daria's script.
+    So, first get table docFeature  with schema BrandAuthority:int, ArticleProviderName:string?, ProviderName:string?, PublisherId:string?
+    then PartnerList with  ProviderName: string, Priority : int,  ProviderId : string,  Market : string
+    then adding BrandAuthority column to PartnerList (joining them on ProviderName, selecting only DISTINCT)
+v5 - 12/2/2020 - add PublisherId (=ProviderId) from json in docFeature, in PROCESSOR
+    and use it for joining instead of ProviderName
+v6 - 12/4/2020 - switсh to using https://aad.cosmos09.osdinfra.net/cosmos/MSN.DnI/shares/UDC/RnR/Users/v-letols/BrandAuthority_akson.tsv file (via Saheli, original is here 
+    https://aad.cosmos09.osdinfra.net/cosmos/MSN.DnI/shares/UDC/RnR/Users/akson/dashboard/BrandAuthority.tsv?property=info), I just keep a copy in my folder. It has all I need to avoid using PROCESSOR, 
+    ie has corresponence ProviderId, ProviderName, BrandAuthority for all markets
+    Schema:  market, ProviderId, ProviderName, BrandAuthority
+Also :"Look at brand authority distribution & providerId distribution for 12/3/2020, 12/4/2020 for the flightIds -
+treatment: 1s-brsageipts2, 1s-brsageipts3, 1s-brsageipts4, 1s-brsageiptscc 
+control: 1s-brsageiptsc
+startDate=(\"2020-12-03\"),endDate=(\"2020-12-04\")
+*/
+
+
+MODULE "/shares/PXSCosmos09.Prod/PXS.DeleteSignal.Prod/PrivacyAnnotation/PrivacyAnnotation.module";
+USING Privacy;
+
+
+#DECLARE market string = "en-us";
+#DECLARE startDate string = @@startDate@@;
+#DECLARE endDate string = @@endDate@@;
+#DECLARE ctrlFdHead string = ("1s-brsageiptsc").ToLowerInvariant();  // 
+#DECLARE trmtFdHead string = ("1s-brsageiptscc").ToLowerInvariant();  // was "1s-brsageipts2"
+#DECLARE moduleType string = "infopane";  // infopane, river
+#DECLARE imprRatio  double = 0.1;   // ratio of impression between ctrl/trmt, for selected debug, default 0.1
+#DECLARE imprCountForSelectedDebug int = 1000;  // min impressions for selected debug, default 5000.
+#DECLARE root       string = "/shares/UDC/RnR/Users/v-letols/ip3_analysis"; // changed so it saves output to my folder
+
+#DECLARE cmsStream string = "/shares/UDC/RnR/DailyCMSUpdate/%Y/%m/DailyCMS_%Y_%m_%d.ss?date=" + @endDate;
+#DECLARE streamExpiry string = "25";
+
+
+/////////////////////////////
+//// derived parameters
+/////////////////////////////
+// for Real-Time signals
+#DECLARE startDateForRT string = DateTime.Parse(@startDate).AddDays(-1).ToString("yyyy-MM-dd");
+#DECLARE endDateForRT string = DateTime.Parse(@endDate).AddDays(1).ToString("yyyy-MM-dd");
+
+/////////////////////////////
+//// OUTPUT
+/////////////////////////////
+
+
+/////////////////////////////
+//// OUTPUT to root folder
+/////////////////////////////
+
+#DECLARE ControlVsTreatmentSS_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatment.ss", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentTSV_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatment.tsv", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentPositionSS_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentPosition.ss", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentPositionTSV_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentPosition.tsv", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentSelectedTSV_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentSelected.tsv", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentSelectedTSV_root_short string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentSelected.short.tsv", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentSelectedTSV_root_brand_short string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentSelected.brand.short.tsv", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentSelectedTSV_root_brand_content_short string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentSelected.brand.content.short.tsv", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+/*
+#DECLARE FlightProcessedDataSS string = @@FlightProcessedDataSS@@;
+#DECLARE ControlVsTreatmentSS string = @@ControlVsTreatmentSS@@;
+#DECLARE ControlVsTreatmentTSV string = @@ControlVsTreatmentTSV@@;
+#DECLARE ControlVsTreatmentPositionSS string = @@ControlVsTreatmentPositionSS@@;
+#DECLARE ControlVsTreatmentPositionTSV string = @@ControlVsTreatmentPositionTSV@@;
+#DECLARE ControlVsTreatmentSelectedTSV string = @@ControlVsTreatmentSelectedTSV@@;
+*/
+
+
+input = SSTREAM
+    SPARSE STREAMSET "shares/UDC/RnR/HourlyExpL1CookedV2/"  
+           PATTERN @"%Y/%m/MsnImpressions_%Y_%m_%d_%h.ss"
+           RANGE __date = [@startDate, @endDate], __hour = ["00","23"];
+
+data =
+    SELECT IF(ExperimentFlightId.Split(',').Contains(@ctrlFdHead), "control", IF(ExperimentFlightId.Split(',').Contains(@trmtFdHead), "treatment", "others")) AS flight,
+           Canvas,
+           IF(ContentRankInModule != null, (int)ContentRankInModule, -1) AS Position,
+           ContentId,
+           Vertical,
+           SubVertical,
+           IsClicked,
+           PageViewDateTime,
+           Idx
+    FROM input
+    WHERE String.Equals(ModuleType, @moduleType, StringComparison.OrdinalIgnoreCase) 
+       && String.Equals(Market, @market, StringComparison.OrdinalIgnoreCase) 
+       && !String.IsNullOrEmpty(ExperimentFlightId)
+       && (ExperimentFlightId.Contains(@trmtFdHead) || ExperimentFlightId.Contains(@ctrlFdHead))
+    HAVING flight == "control" OR flight == "treatment"
+;
+
+/*
+OUTPUT TO SSTREAM @FlightProcessedDataSS
+CLUSTERED BY flight, Canvas, ContentId
+SORTED BY flight, Canvas, ContentId;
+*/
+
+stats =
+    SELECT flight,
+           ContentId,
+           IF(PageViewDateTime != null, ((DateTime)PageViewDateTime).Hour, -1) AS Hour,
+           ((DateTime)PageViewDateTime) AS PageViewDateTime,
+           IsClicked
+    FROM data
+    WHERE PageViewDateTime != null
+    HAVING Hour >= 0;
+
+// add hourly dynamic scores.
+realTimeData = 
+    EXTRACT DocId,
+        TrendingScoreV1:double,
+        TrendingScoreV2:double,
+        WebSensorScore:double,
+        logScore:double,
+        timestamp:int,
+        __date,
+        __hour
+ 
+    FROM SPARSE STREAMSET @"/shares/UDC/RnR/Users/v-yuxin1/MSNBatchIngestHourly/" 
+    PATTERN "%Y/%m/%d/trending_topics_%h.txt" 
+    RANGE __date = [@startDateForRT, @endDateForRT], __hour = ["00","23"]
+    USING DefaultTextExtractor;
+
+realTimeData = 
+    SELECT  DocId, 
+            (int) TrendingScoreV1 AS TrendingScoreV1, 
+            (int) TrendingScoreV2 AS TrendingScoreV2,
+            (int) WebSensorScore AS WebSensorScore, 
+            (int) logScore AS logScore,
+            DateTimeOffset.FromUnixTimeSeconds(timestamp).DateTime AS date_processed
+    FROM realTimeData;
+
+realTimeData =
+    SELECT DocId,
+           new Tuple<DateTime, int, int, int, int>(date_processed, TrendingScoreV1, TrendingScoreV2, WebSensorScore, logScore) AS tuple
+    FROM realTimeData;
+
+realTimeData =
+    SELECT DocId,
+           LIST(tuple) AS tuples
+    FROM realTimeData
+    GROUP BY DocId;
+
+// Join stats with realTimeData
+stats =
+    SELECT flight,
+           ContentId,
+           Hour,
+           PageViewDateTime,
+           IsClicked,
+           IF(tuples != null, GetDynamicScores(tuples, PageViewDateTime), new List<int>(){0, 0, 0, 0}) AS DynamicScores
+    FROM stats
+         LEFT OUTER JOIN
+             realTimeData
+         ON stats.ContentId == realTimeData.DocId;
+
+stats =
+    SELECT flight,
+           ContentId,
+           Hour,
+           PageViewDateTime,
+           IsClicked,
+           DynamicScores[0] AS trendingScoreV1,
+           DynamicScores[1] AS trendingScoreV2,
+           DynamicScores[2] AS webSensorScore,
+           DynamicScores[3] AS logScore
+    FROM stats;
+
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+// get timestamp for first/last show.
+firstAndLast =
+    SELECT flight,
+           ContentId,
+           MIN(PageViewDateTime) AS firstShow,
+           MAX(PageViewDateTime) AS lastShow
+    FROM stats
+    GROUP BY flight, ContentId;
+
+// average within each hour per doc
+stats =
+    SELECT flight,
+           ContentId,
+           Hour,
+           (int)(COUNT()) AS count,
+           (int)(SUM(IsClicked)) AS ClickCount,
+           (int)(AVG(trendingScoreV1)) AS trendingScoreV1,
+           (int)(AVG(trendingScoreV2)) AS trendingScoreV2,
+           (int)(AVG(webSensorScore)) AS webSensorScore,
+           (int)(AVG(logScore)) AS logScore
+    FROM stats
+    GROUP BY flight, ContentId, Hour;
+
+
+stats =
+    SELECT flight,
+       ContentId,
+   new Tuple<int, List<int>>(Hour, new List<int>(){count, ClickCount, trendingScoreV1, trendingScoreV2, webSensorScore, logScore}) AS tuple
+    FROM stats;
+
+stats =
+    SELECT flight,
+       ContentId,
+           LIST(tuple).Sum(t => (t.Item2)[0]) AS totalImpressions,
+           LIST(tuple).Sum(t => (t.Item2)[1]) AS totalClicks,
+           string.Join("|", LIST(tuple).OrderBy(t => t.Item1).Select(t => t.Item1 + ":" + string.Join(":", t.Item2))) AS DebugInfo
+    FROM stats
+    GROUP BY flight, ContentId;
+
+// join firstAndLast.
+stats =
+    SELECT flight,
+           ContentId,
+           (int)totalImpressions AS totalImpressions,
+           (int)totalClicks AS totalClicks,
+           firstShow,
+           lastShow,
+           DebugInfo
+    FROM stats
+    INNER JOIN firstAndLast
+    ON stats.flight == firstAndLast.flight AND stats.ContentId == firstAndLast.ContentId;
+
+// Split it into two subsets, then do a full outer join.
+control =
+    SELECT * FROM stats WHERE flight == "control";
+
+treatment =
+    SELECT * FROM stats WHERE flight == "treatment";
+
+joined =
+    SELECT (c.ContentId ?? t.ContentId) AS ContentId,
+           (c.totalImpressions ?? 0) AS totalImpr_ctrl,
+           (c.totalClicks ?? 0) AS totalClick_ctrl,           
+           (t.totalImpressions ?? 0) AS totalImpr_trmt,
+           (t.totalClicks ?? 0) AS totalClick_trmt,           
+           ((DateTime?)(c.firstShow) ?? null) AS firstShow_ctrl,
+           ((DateTime?)(c.lastShow) ?? null) AS lastShow_ctrl,
+           ((DateTime?)(t.firstShow) ?? null) AS firstShow_trmt,
+           ((DateTime?)(t.lastShow) ?? null) AS lastShow_trmt,
+           (c.DebugInfo ?? "") AS debugInfo_ctrl,
+           (t.DebugInfo ?? "") AS debugInfo_trmt
+    FROM control AS c
+    FULL OUTER JOIN treatment AS t
+    ON c.ContentId == t.ContentId;           
+
+[Privacy.Asset.NonPersonal]
+OUTPUT TO @ControlVsTreatmentTSV_root
+ORDER BY totalImpr_ctrl DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT TO
+SSTREAM @ControlVsTreatmentSS_root
+CLUSTERED BY ContentId, totalImpr_ctrl
+SORTED BY totalImpr_ctrl DESC
+WITH STREAMEXPIRY @streamExpiry;
+
+// Select the one with biggest discrepancy between ctrl/trmt
+selected =
+SELECT *
+FROM joined
+WHERE Math.Max(totalImpr_ctrl, totalImpr_trmt) >= @imprCountForSelectedDebug
+    && Math.Min(totalImpr_ctrl, totalImpr_trmt) < Math.Max(totalImpr_ctrl, totalImpr_trmt) * @imprRatio;
+
+
+//cmsData = SSTREAM @cmsStream;
+
+
+cmsData  = 
+    SELECT documentId,
+           providerId, // <-- my
+           type,
+           vert,
+           subVert,
+           TrimPunctuationCharByChar(title).Replace(" ", "-") AS title,
+           IF(type == "article", "ar", IF(type == "slideshow", "ss", "vi")) AS type_pre
+    FROM (SSTREAM @cmsStream);
+  //  WHERE locale.Split('-')[0] == (@market).Split('-')[0] || locale == "global";
+
+cmsData= 
+    SELECT documentId,
+           providerId, // <-- my
+           title,
+           String.Concat("https://www.msn.com/", @market, "/", IF(vert != null, vert, "news"), "/", IF(subVert != null, subVert, "newsus"), "/", title, "/", type_pre, "-", documentId) AS MsnUnofficialUrl
+    FROM cmsData;
+
+
+selected =
+    SELECT selected.*,
+           cmsData.title,
+           cmsData.providerId, // <-- my
+           cmsData.MsnUnofficialUrl ?? "" AS MsnUnofficialUrl
+    FROM selected
+         LEFT OUTER JOIN cmsData
+         ON selected.ContentId == cmsData.documentId;
+// At this point we have these columns in selected:
+// ContentId	totalImpr_ctrl	totalClick_ctrl	totalImpr_trmt	totalClick_trmt	firstShow_ctrl	lastShow_ctrl	firstShow_trmt	
+// lastShow_trmt	debugInfo_ctrl	debugInfo_trmt	title	providerId	MsnUnofficialUrl
+selected_short = 
+    SELECT 
+        providerId,
+        SUM(totalClick_ctrl) AS TolalClicksControl,
+        SUM(totalClick_trmt) AS TolalClicksTreatment
+    FROM selected
+GROUP BY providerId; 
+
+[Privacy.Asset.NonPersonal]
+OUTPUT selected TO @ControlVsTreatmentSelectedTSV_root
+ORDER BY providerId, totalImpr_ctrl DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+[Privacy.Asset.NonPersonal]
+OUTPUT selected_short TO @ControlVsTreatmentSelectedTSV_root_short
+ORDER BY providerId DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+//BrandAuthority selection - now with BrandAuthority_akson.tsv file, 
+//shema: market, ProviderId, ProviderName, BrandAuthority
+//          en-us	AA9dPwo	    EAD	        400
+//          en-us	AA28Ge	    EFE	        600
+
+
+
+PartnerListWithBrandAuthority = 
+    EXTRACT 
+        Market : string,
+        ProviderId : string,
+        ProviderName: string, 
+        BrandAuthority : int
+    FROM "/shares/UDC/RnR/Users/v-letols/BrandAuthority_akson.tsv" // I save a local copy, original is https://aad.cosmos09.osdinfra.net/cosmos/MSN.DnI/shares/UDC/RnR/Users/akson/dashboard/BrandAuthority.tsv
+    USING DefaultTextExtractor();
+
+
+
+
+selected_with_brand =  // adding BrandAuthority column
+    SELECT selected.*,
+           BrandAuthority
+    FROM selected 
+         LEFT OUTER JOIN PartnerListWithBrandAuthority 
+         ON selected.providerId == PartnerListWithBrandAuthority.ProviderId;
+
+// leaving only BrandAuthority and clicks for ctrl and treatment
+selected_with_brand_short = 
+    SELECT 
+        BrandAuthority,
+        SUM(totalClick_ctrl) AS TolalClicksControl,
+        SUM(totalClick_trmt) AS TolalClicksTreatment
+    FROM selected_with_brand
+GROUP BY BrandAuthority; 
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT selected_with_brand_short TO @ControlVsTreatmentSelectedTSV_root_brand_short
+ORDER BY BrandAuthority DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+// need to include ContentId too, to see missing BrandAuthority items
+selected_with_brand_content_short = 
+    SELECT 
+        BrandAuthority,
+        ContentId,
+        SUM(totalClick_ctrl) AS TolalClicksControl,
+        SUM(totalClick_trmt) AS TolalClicksTreatment
+    FROM selected_with_brand
+GROUP BY BrandAuthority, ContentId; 
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT selected_with_brand_content_short TO @ControlVsTreatmentSelectedTSV_root_brand_content_short
+ORDER BY BrandAuthority, ContentId ASC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+
+////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////
+
+stats =
+    SELECT flight,
+           ContentId,
+           Position,
+           COUNT() AS count
+    FROM data
+    WHERE Position >= 1
+    GROUP BY flight, ContentId, Position;
+
+stats =
+    SELECT flight,
+           ContentId,
+           new Tuple<int, long>(Position, count) AS tuple
+    FROM stats;
+
+stats =
+    SELECT flight,
+           ContentId,
+           LIST(tuple).Sum(t => t.Item2) AS totalImpressions,
+           string.Join("|", LIST(tuple).OrderBy(t => t.Item1).Select(t => t.Item1 + ":" + t.Item2)) AS DebugInfo           
+    FROM stats
+    GROUP BY flight, ContentId;
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT stats TO @ControlVsTreatmentPositionTSV_root
+ORDER BY flight, totalImpressions DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT stats TO SSTREAM
+@ControlVsTreatmentPositionSS_root
+CLUSTERED BY flight, ContentId
+SORTED BY flight, totalImpressions DESC
+WITH STREAMEXPIRY @streamExpiry;
+
+
+
+
+#CS
+
+using Microsoft.SCOPE.Types;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using ScopeRuntime;
+
+
+
+public static List<int> GetDynamicScores(IEnumerable<Tuple<DateTime, int, int, int, int>> tuples, DateTime docImprTime)
+{
+    foreach (var tuple in tuples.OrderByDescending(t => t.Item1))
+    {
+        if (tuple.Item1 < docImprTime)
+        {
+            return new List<int>(){tuple.Item2, tuple.Item3, tuple.Item4, tuple.Item5};
+        }        
+    }
+    return new List<int>(){0, 0, 0, 0};
+}
+       public static string ConvertWhitespacesToSingleSpace(string value)
+        {
+            value = Regex.Replace(value, @"\s+", " ");
+            return value;
+        }
+
+        public static string TrimPunctuationCharByChar(string value)
+        {
+            char[] charArray = new char[value.Length];
+            for (int i = 0; i < value.Length; i++)
+            {
+                if (char.IsPunctuation(value[i]) || value[i] == '|')
+                    charArray[i] = ' ';
+                else
+                    charArray[i] = value[i];
+            }
+            return ConvertWhitespacesToSingleSpace(new string(charArray).Trim());
+        }
+
+#ENDCS

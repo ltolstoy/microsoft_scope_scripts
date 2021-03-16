@@ -1,0 +1,416 @@
+﻿//Script GUID:39f3fdf0-3468-40ad-ae34-3d5e3fc17ff6
+//Used for tracking history
+/* <Overview>
+This is a modification of the script FlightAanlysis.script
+https://microsoft.visualstudio.com/Universal%20Store/_git/CoreRanker?path=%2Fsrc%2FAetherModules%2FFlightAnalysis%2FFlightAanlysis.script
+Via Saheli: 
+we want to look at differences between two pairs - 
+1. 1s-brsageipts4 & 1s-brsageiptsc 
+2. 1s-brsageipts2 & 1s-brsageiptsc. 
+Dates are from 12-11 onwards....want to look at daily differences
+
+Market "en-us"
+Need moduleType "river" and "infopane" too!
+
+You can use this script - https://microsoft.visualstudio.com/Universal%20Store/_git/CoreRanker?path=%2Fsrc%2FAetherModules%2FFlightAnalysis%2FFlightAanlysis.script.
+
+DailyCMS_x_x_x.ss schema:
+documentId	string
+providerId	string
+document	string
+vector	string
+vectorDim	int?
+vectorSource	string
+bagOfWords	string
+textDssm	string
+dssmDim	int?
+dssmSource	string
+type	string
+locale	string
+vert	string
+subVert	string
+labelScore	string
+title	string
+body	string
+url	string
+displayPublishedDateTime	string
+lastPublishedDateTime	string
+vectorMap	Microsoft.SCOPE.Types.ScopeMap_x003C_System.String_x002C__x0020_System.String_x003E_
+headlineImageIds	string
+allMktsVectorMap	Microsoft.SCOPE.Types.ScopeMap_x003C_System.String_x002C__x0020_System.String_x003E_
+updated	int
+
+Note:  line 149 need to be added (market:string,), because somebody  added  new column with market now!
+        Actually no, some fiels have it, some don't
+in realTimeData in /MSN.DnI/shares/UDC/RnR/Users/v-yuxin1/MSNBatchIngestHourly/2020/12/14/trending_topics_16.txt
+So script fails with "Not enough columns in input record." for other files... Need to exclude
+realTimeData at all for now.
+
+We need to output only ControlVsTreatmentSelected.tsv files, as it has all necessary data for this task)
+
+Submit with 
+startDate=(\"2020-12-16\"),endDate=(\"2020-12-16\")
+
+
+v2 - 12/18/2020 - excluding realTimeData, because I can't read files in /shares/UDC/RnR/Users/v-yuxin1/MSNBatchIngestHourly/2020/12/14/trending_topics_XX.txt 
+as they have inconsistent schema ( some with last column= market, some without)
+So delete that part at all.
+*/
+
+
+MODULE "/shares/PXSCosmos09.Prod/PXS.DeleteSignal.Prod/PrivacyAnnotation/PrivacyAnnotation.module";
+USING Privacy;
+
+
+#DECLARE market string = "en-us";
+#DECLARE startDate string = @@startDate@@;
+#DECLARE endDate string = @@endDate@@;
+#DECLARE ctrlFdHead string = ("1s-brsageiptsc").ToLowerInvariant();  // "1s-brsageiptsc" is my Ctrl flight for all
+#DECLARE trmtFdHead string = ("1s-brsageipts2").ToLowerInvariant();  // "1s-brsageip4"
+#DECLARE moduleType string = "infopane";  // infopane, river
+#DECLARE imprRatio  double = 0.1;   // ratio of impression between ctrl/trmt, for selected debug, default 0.1
+#DECLARE imprCountForSelectedDebug int = 1000;  // min impressions for selected debug, default 5000.
+#DECLARE root       string = "/shares/UDC/RnR/Users/v-letols/ip3_analysis"; // changed so it saves output to my folder
+
+#DECLARE cmsStream string = "/shares/UDC/RnR/DailyCMSUpdate/%Y/%m/DailyCMS_%Y_%m_%d.ss?date=" + @endDate;
+#DECLARE streamExpiry string = "25";
+
+
+/////////////////////////////
+//// derived parameters
+/////////////////////////////
+// for Real-Time signals
+#DECLARE startDateForRT string = DateTime.Parse(@startDate).AddDays(-1).ToString("yyyy-MM-dd");
+#DECLARE endDateForRT string = DateTime.Parse(@endDate).AddDays(1).ToString("yyyy-MM-dd");
+
+/////////////////////////////
+//// OUTPUT
+/////////////////////////////
+
+
+/////////////////////////////
+//// OUTPUT to root folder
+/////////////////////////////
+
+#DECLARE ControlVsTreatmentSS_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatment.ss", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentTSV_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatment.tsv", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentPositionSS_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentPosition.ss", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentPositionTSV_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentPosition.tsv", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentSelectedTSV_root string = string.Format("{0}/{1}/{2}/{3}_vs_{6}/{4}_{5}.ControlVsTreatmentSelected.tsv", @root, @moduleType, @market, @trmtFdHead, @startDate, @endDate,  @ctrlFdHead);
+
+/*
+#DECLARE FlightProcessedDataSS string = @@FlightProcessedDataSS@@;
+#DECLARE ControlVsTreatmentSS string = @@ControlVsTreatmentSS@@;
+#DECLARE ControlVsTreatmentTSV string = @@ControlVsTreatmentTSV@@;
+#DECLARE ControlVsTreatmentPositionSS string = @@ControlVsTreatmentPositionSS@@;
+#DECLARE ControlVsTreatmentPositionTSV string = @@ControlVsTreatmentPositionTSV@@;
+#DECLARE ControlVsTreatmentSelectedTSV string = @@ControlVsTreatmentSelectedTSV@@;
+*/
+
+
+input = SSTREAM
+    SPARSE STREAMSET "shares/UDC/RnR/HourlyExpL1CookedV2/"  
+           PATTERN @"%Y/%m/MsnImpressions_%Y_%m_%d_%h.ss"
+           RANGE __date = [@startDate, @endDate], __hour = ["00","23"];
+
+data =
+    SELECT IF(ExperimentFlightId.Split(',').Contains(@ctrlFdHead), "control", IF(ExperimentFlightId.Split(',').Contains(@trmtFdHead), "treatment", "others")) AS flight,
+           Canvas,
+           IF(ContentRankInModule != null, (int)ContentRankInModule, -1) AS Position,
+           ContentId,
+           Vertical,
+           SubVertical,
+           IsClicked,
+           PageViewDateTime,
+           Idx
+    FROM input
+    WHERE String.Equals(ModuleType, @moduleType, StringComparison.OrdinalIgnoreCase) 
+       && String.Equals(Market, @market, StringComparison.OrdinalIgnoreCase) 
+       && !String.IsNullOrEmpty(ExperimentFlightId)
+       && (ExperimentFlightId.Contains(@trmtFdHead) || ExperimentFlightId.Contains(@ctrlFdHead))
+    HAVING flight == "control" OR flight == "treatment"
+;
+
+/*
+OUTPUT TO SSTREAM @FlightProcessedDataSS
+CLUSTERED BY flight, Canvas, ContentId
+SORTED BY flight, Canvas, ContentId;
+*/
+
+stats =
+    SELECT flight,
+           ContentId,
+           IF(PageViewDateTime != null, ((DateTime)PageViewDateTime).Hour, -1) AS Hour,
+           ((DateTime)PageViewDateTime) AS PageViewDateTime,
+           IsClicked
+    FROM data
+    WHERE PageViewDateTime != null
+    HAVING Hour >= 0;
+
+// add hourly dynamic scores.
+/*realTimeData = 
+    EXTRACT DocId:string,
+        TrendingScoreV1:double,
+        TrendingScoreV2:double,
+        WebSensorScore:double,
+        logScore:double,
+        timestamp:int,
+        market:string,  // <- they added  new column with market now! - but only in some files
+        __date,
+        __hour
+ 
+    FROM SPARSE STREAMSET @"/shares/UDC/RnR/Users/v-yuxin1/MSNBatchIngestHourly/" 
+    PATTERN "%Y/%m/%d/trending_topics_%h.txt" 
+    RANGE __date = [@startDateForRT, @endDateForRT], __hour = ["00","23"]
+    USING DefaultTextExtractor;
+
+realTimeData = 
+    SELECT  DocId, 
+            (int) TrendingScoreV1 AS TrendingScoreV1, 
+            (int) TrendingScoreV2 AS TrendingScoreV2,
+            (int) WebSensorScore AS WebSensorScore, 
+            (int) logScore AS logScore,
+            DateTimeOffset.FromUnixTimeSeconds(timestamp).DateTime AS date_processed
+    FROM realTimeData;
+
+realTimeData =
+    SELECT DocId,
+           new Tuple<DateTime, int, int, int, int>(date_processed, TrendingScoreV1, TrendingScoreV2, WebSensorScore, logScore) AS tuple
+    FROM realTimeData;
+
+realTimeData =
+    SELECT DocId,
+           LIST(tuple) AS tuples
+    FROM realTimeData
+    GROUP BY DocId;
+*/
+
+
+
+stats =
+    SELECT flight,
+           ContentId,
+           Hour,
+           PageViewDateTime,
+           IsClicked
+    FROM stats;
+
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+// get timestamp for first/last show.
+firstAndLast =
+    SELECT flight,
+           ContentId,
+           MIN(PageViewDateTime) AS firstShow,
+           MAX(PageViewDateTime) AS lastShow
+    FROM stats
+    GROUP BY flight, ContentId;
+
+// average within each hour per doc
+stats =
+    SELECT flight,
+           ContentId,
+           Hour,
+           (int)(COUNT()) AS count,
+           (int)(SUM(IsClicked)) AS ClickCount
+    FROM stats
+    GROUP BY flight, ContentId, Hour;
+
+
+stats =
+    SELECT flight,
+       ContentId,
+   new Tuple<int, List<int>>(Hour, new List<int>(){count, ClickCount}) AS tuple
+    FROM stats;
+
+stats =
+    SELECT flight,
+       ContentId,
+           LIST(tuple).Sum(t => (t.Item2)[0]) AS totalImpressions,
+           LIST(tuple).Sum(t => (t.Item2)[1]) AS totalClicks,
+           string.Join("|", LIST(tuple).OrderBy(t => t.Item1).Select(t => t.Item1 + ":" + string.Join(":", t.Item2))) AS DebugInfo
+    FROM stats
+    GROUP BY flight, ContentId;
+
+// join firstAndLast.
+stats =
+    SELECT flight,
+           ContentId,
+           (int)totalImpressions AS totalImpressions,
+           (int)totalClicks AS totalClicks,
+           firstShow,
+           lastShow,
+           DebugInfo
+    FROM stats
+    INNER JOIN firstAndLast
+    ON stats.flight == firstAndLast.flight AND stats.ContentId == firstAndLast.ContentId;
+
+// Split it into two subsets, then do a full outer join.
+control =
+    SELECT * FROM stats WHERE flight == "control";
+
+treatment =
+    SELECT * FROM stats WHERE flight == "treatment";
+
+joined =
+    SELECT (c.ContentId ?? t.ContentId) AS ContentId,
+           (c.totalImpressions ?? 0) AS totalImpr_ctrl,
+           (c.totalClicks ?? 0) AS totalClick_ctrl,           
+           (t.totalImpressions ?? 0) AS totalImpr_trmt,
+           (t.totalClicks ?? 0) AS totalClick_trmt,           
+           ((DateTime?)(c.firstShow) ?? null) AS firstShow_ctrl,
+           ((DateTime?)(c.lastShow) ?? null) AS lastShow_ctrl,
+           ((DateTime?)(t.firstShow) ?? null) AS firstShow_trmt,
+           ((DateTime?)(t.lastShow) ?? null) AS lastShow_trmt,
+           (c.DebugInfo ?? "") AS debugInfo_ctrl,
+           (t.DebugInfo ?? "") AS debugInfo_trmt
+    FROM control AS c
+    FULL OUTER JOIN treatment AS t
+    ON c.ContentId == t.ContentId;           
+/*
+[Privacy.Asset.NonPersonal]
+OUTPUT TO @ControlVsTreatmentTSV_root
+ORDER BY totalImpr_ctrl DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT TO
+SSTREAM @ControlVsTreatmentSS_root
+CLUSTERED BY ContentId, totalImpr_ctrl
+SORTED BY totalImpr_ctrl DESC
+WITH STREAMEXPIRY @streamExpiry;
+*/
+
+// Select the one with biggest discrepancy between ctrl/trmt
+selected =
+SELECT *
+FROM joined
+WHERE Math.Max(totalImpr_ctrl, totalImpr_trmt) >= @imprCountForSelectedDebug
+    && Math.Min(totalImpr_ctrl, totalImpr_trmt) < Math.Max(totalImpr_ctrl, totalImpr_trmt) * @imprRatio;
+
+
+//cmsData = SSTREAM @cmsStream;
+
+
+cmsData  = 
+    SELECT documentId,
+           providerId, // <-- my
+           type,
+           vert,
+           subVert,
+           TrimPunctuationCharByChar(title).Replace(" ", "-") AS title,
+           IF(type == "article", "ar", IF(type == "slideshow", "ss", "vi")) AS type_pre
+    FROM (SSTREAM @cmsStream);
+  //  WHERE locale.Split('-')[0] == (@market).Split('-')[0] || locale == "global";
+
+cmsData= 
+    SELECT documentId,
+           providerId, // <-- my
+           title,
+           String.Concat("https://www.msn.com/", @market, "/", IF(vert != null, vert, "news"), "/", IF(subVert != null, subVert, "newsus"), "/", title, "/", type_pre, "-", documentId) AS MsnUnofficialUrl
+    FROM cmsData;
+
+
+selected =
+    SELECT selected.*,
+           cmsData.title,
+           cmsData.providerId, // <-- my
+           cmsData.MsnUnofficialUrl ?? "" AS MsnUnofficialUrl
+    FROM selected
+         LEFT OUTER JOIN cmsData
+         ON selected.ContentId == cmsData.documentId;
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT selected TO @ControlVsTreatmentSelectedTSV_root
+ORDER BY providerId, totalImpr_ctrl DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+
+////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////
+/*
+stats =
+    SELECT flight,
+           ContentId,
+           Position,
+           COUNT() AS count
+    FROM data
+    WHERE Position >= 1
+    GROUP BY flight, ContentId, Position;
+
+stats =
+    SELECT flight,
+           ContentId,
+           new Tuple<int, long>(Position, count) AS tuple
+    FROM stats;
+
+stats =
+    SELECT flight,
+           ContentId,
+           LIST(tuple).Sum(t => t.Item2) AS totalImpressions,
+           string.Join("|", LIST(tuple).OrderBy(t => t.Item1).Select(t => t.Item1 + ":" + t.Item2)) AS DebugInfo           
+    FROM stats
+    GROUP BY flight, ContentId;
+*/
+/*
+[Privacy.Asset.NonPersonal]
+OUTPUT stats TO @ControlVsTreatmentPositionTSV_root
+ORDER BY flight, totalImpressions DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT stats TO SSTREAM
+@ControlVsTreatmentPositionSS_root
+CLUSTERED BY flight, ContentId
+SORTED BY flight, totalImpressions DESC
+WITH STREAMEXPIRY @streamExpiry;
+*/
+
+
+
+
+#CS
+
+using Microsoft.SCOPE.Types;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using ScopeRuntime;
+
+public static List<int> GetDynamicScores(IEnumerable<Tuple<DateTime, int, int, int, int>> tuples, DateTime docImprTime)
+{
+    foreach (var tuple in tuples.OrderByDescending(t => t.Item1))
+    {
+        if (tuple.Item1 < docImprTime)
+        {
+            return new List<int>(){tuple.Item2, tuple.Item3, tuple.Item4, tuple.Item5};
+        }        
+    }
+    return new List<int>(){0, 0, 0, 0};
+}
+       public static string ConvertWhitespacesToSingleSpace(string value)
+        {
+            value = Regex.Replace(value, @"\s+", " ");
+            return value;
+        }
+
+        public static string TrimPunctuationCharByChar(string value)
+        {
+            char[] charArray = new char[value.Length];
+            for (int i = 0; i < value.Length; i++)
+            {
+                if (char.IsPunctuation(value[i]) || value[i] == '|')
+                    charArray[i] = ' ';
+                else
+                    charArray[i] = value[i];
+            }
+            return ConvertWhitespacesToSingleSpace(new string(charArray).Trim());
+        }
+#ENDCS

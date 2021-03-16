@@ -1,0 +1,248 @@
+﻿//Script GUID:c6179922-4763-4733-9518-73a2b7154f46
+//Used for tracking history
+/*<Overview>
+This script is based on FlightAnalysis_v6, but changed to calculate BrandAuthority and ProviderId clicks distribution for one flight (not comparing treatment and control as before).
+"Look at brand authority distribution & providerId distribution for 12/3/2020, 12/4/2020 for the flightIds -
+1s-brsageiptsc, 1s-brsageipts2, 1s-brsageipts3, 1s-brsageipts4, 1s-brsageiptscc 
+startDate=(\"2020-12-03\"),endDate=(\"2020-12-04\") and 
+startDate=(\"2020-12-11\"),endDate=(\"2020-12-13\")
+
+*/
+
+MODULE "/shares/PXSCosmos09.Prod/PXS.DeleteSignal.Prod/PrivacyAnnotation/PrivacyAnnotation.module";
+USING Privacy;
+
+
+#DECLARE market string = "en-us";
+#DECLARE startDate string = @@startDate@@;
+#DECLARE endDate string = @@endDate@@;
+#DECLARE oneFdHead string = ("1s-brsageiptscc").ToLowerInvariant();  // now I need just one flight
+#DECLARE moduleType string = "infopane";  // infopane, river
+#DECLARE imprRatio  double = 0.1;   // ratio of impression between ctrl/trmt, for selected debug, default 0.1
+#DECLARE imprCountForSelectedDebug int = 1000;  // min impressions for selected debug, default 5000.
+#DECLARE root       string = "/shares/UDC/RnR/Users/v-letols/ip3_analysis_single"; // changed so it saves output to my folder
+
+#DECLARE cmsStream string = "/shares/UDC/RnR/DailyCMSUpdate/%Y/%m/DailyCMS_%Y_%m_%d.ss?date=" + @endDate;
+#DECLARE streamExpiry string = "25";
+
+
+/////////////////////////////
+//// derived parameters
+/////////////////////////////
+// for Real-Time signals
+#DECLARE startDateForRT string = DateTime.Parse(@startDate).AddDays(-1).ToString("yyyy-MM-dd");
+#DECLARE endDateForRT string = DateTime.Parse(@endDate).AddDays(1).ToString("yyyy-MM-dd");
+
+/////////////////////////////
+//// OUTPUT
+/////////////////////////////
+
+
+/////////////////////////////
+//// OUTPUT to root folder
+/////////////////////////////
+
+#DECLARE ControlVsTreatmentSS_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatment.ss", @root, @moduleType, @market, @oneFdHead, @startDate, @endDate);
+#DECLARE statTSV_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.stat.tsv", @root, @moduleType, @market, @oneFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentPositionSS_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentPosition.ss", @root, @moduleType, @market, @oneFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentPositionTSV_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentPosition.tsv", @root, @moduleType, @market, @oneFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentSelectedTSV_root string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentSelected.tsv", @root, @moduleType, @market, @oneFdHead, @startDate, @endDate);
+#DECLARE ControlVsTreatmentSelectedTSV_root_short string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.ControlVsTreatmentSelected.short.tsv", @root, @moduleType, @market, @oneFdHead, @startDate, @endDate);
+#DECLARE distribution_brand_short string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.distribution_brand_short.tsv", @root, @moduleType, @market, @oneFdHead, @startDate, @endDate);
+#DECLARE distribution_brand_content_short string = string.Format("{0}/{1}/{2}/{3}/{4}_{5}.distribution_brand_content_short.tsv", @root, @moduleType, @market, @oneFdHead, @startDate, @endDate);
+/*
+#DECLARE FlightProcessedDataSS string = @@FlightProcessedDataSS@@;
+#DECLARE ControlVsTreatmentSS string = @@ControlVsTreatmentSS@@;
+#DECLARE ControlVsTreatmentTSV string = @@ControlVsTreatmentTSV@@;
+#DECLARE ControlVsTreatmentPositionSS string = @@ControlVsTreatmentPositionSS@@;
+#DECLARE ControlVsTreatmentPositionTSV string = @@ControlVsTreatmentPositionTSV@@;
+#DECLARE ControlVsTreatmentSelectedTSV string = @@ControlVsTreatmentSelectedTSV@@;
+*/
+
+
+input = SSTREAM
+    SPARSE STREAMSET "shares/UDC/RnR/HourlyExpL1CookedV2/"  
+           PATTERN @"%Y/%m/MsnImpressions_%Y_%m_%d_%h.ss"
+           RANGE __date = [@startDate, @endDate], __hour = ["00","23"];
+
+data =
+    SELECT 
+           Canvas,
+           IF(ContentRankInModule != null, (int)ContentRankInModule, -1) AS Position,
+           ContentId,
+           Vertical,
+           SubVertical,
+           IsClicked,
+           PageViewDateTime,
+           Idx
+    FROM input
+    WHERE String.Equals(ModuleType, @moduleType, StringComparison.OrdinalIgnoreCase) 
+       && String.Equals(Market, @market, StringComparison.OrdinalIgnoreCase) 
+       && !String.IsNullOrEmpty(ExperimentFlightId)
+       && (ExperimentFlightId.Contains(@oneFdHead)) ;
+
+//forming stats section
+
+stats =
+    SELECT 
+           ContentId,
+           IF(PageViewDateTime != null, ((DateTime)PageViewDateTime).Hour, -1) AS Hour,
+           ((DateTime)PageViewDateTime) AS PageViewDateTime,
+           IsClicked
+    FROM data
+    WHERE PageViewDateTime != null
+    HAVING Hour >= 0;
+
+// average within each hour per doc
+stats =
+    SELECT 
+           ContentId,
+           Hour,
+           (int)(COUNT()) AS count,
+           (int)(SUM(IsClicked)) AS ClickCount
+    FROM stats
+    GROUP BY ContentId, Hour;
+
+stats =
+    SELECT 
+       ContentId,
+   new Tuple<int, List<int>>(Hour, new List<int>(){count, ClickCount}) AS tuple
+    FROM stats;
+
+stats =
+    SELECT 
+       ContentId,
+           LIST(tuple).Sum(t => (t.Item2)[0]) AS totalImpressions,
+           LIST(tuple).Sum(t => (t.Item2)[1]) AS totalClicks
+    FROM stats
+    GROUP BY ContentId;
+// at this point schema is: ContentId,	totalImpressions,	totalClicks
+
+//Output stats
+[Privacy.Asset.NonPersonal]
+OUTPUT TO @statTSV_root 
+ORDER BY totalImpressions DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+
+// adding csmData to stats
+cmsData  = 
+    SELECT documentId,
+           providerId, 
+           type,
+           vert,
+           subVert,
+           TrimPunctuationCharByChar(title).Replace(" ", "-") AS title,
+           IF(type == "article", "ar", IF(type == "slideshow", "ss", "vi")) AS type_pre
+    FROM (SSTREAM @cmsStream);
+  //  WHERE locale.Split('-')[0] == (@market).Split('-')[0] || locale == "global";
+
+cmsData= 
+    SELECT documentId,
+           providerId, 
+           title
+           //String.Concat("https://www.msn.com/", @market, "/", IF(vert != null, vert, "news"), "/", IF(subVert != null, subVert, "newsus"), "/", title, "/", type_pre, "-", documentId) AS MsnUnofficialUrl
+    FROM cmsData;
+
+selected =
+    SELECT stats.*,
+           cmsData.title,
+           cmsData.providerId 
+           //cmsData.MsnUnofficialUrl ?? "" AS MsnUnofficialUrl
+    FROM stats
+         LEFT OUTER JOIN cmsData
+         ON stats.ContentId == cmsData.documentId;
+// At this point we have these columns in selected:
+// ContentId	totalImpressions	totalClick   title	providerId	
+
+//BrandAuthority selection - now with BrandAuthority_akson.tsv file, 
+//shema: market, ProviderId, ProviderName, BrandAuthority
+//          en-us	AA9dPwo	    EAD	        400
+//          en-us	AA28Ge	    EFE	        600
+
+
+
+PartnerListWithBrandAuthority = 
+    EXTRACT 
+        Market : string,
+        ProviderId : string,
+        ProviderName: string, 
+        BrandAuthority : int
+    FROM "/shares/UDC/RnR/Users/v-letols/BrandAuthority_akson.tsv" // I save a local copy, original is https://aad.cosmos09.osdinfra.net/cosmos/MSN.DnI/shares/UDC/RnR/Users/akson/dashboard/BrandAuthority.tsv
+    USING DefaultTextExtractor();
+
+
+
+
+selected_with_brand =  // adding BrandAuthority column
+    SELECT selected.*,
+           BrandAuthority
+    FROM selected 
+         LEFT OUTER JOIN PartnerListWithBrandAuthority 
+         ON selected.providerId == PartnerListWithBrandAuthority.ProviderId;
+
+// leaving only BrandAuthority and clicks for ctrl and treatment
+selected_with_brand_short = 
+    SELECT 
+        BrandAuthority,
+        SUM(totalClicks) AS TolalClicks
+    FROM selected_with_brand
+GROUP BY BrandAuthority; 
+
+[Privacy.Asset.NonPersonal]
+OUTPUT selected_with_brand_short TO @distribution_brand_short
+ORDER BY BrandAuthority DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+// need to include ContentId too, to see missing BrandAuthority items
+selected_with_brand_content_short = 
+    SELECT 
+        BrandAuthority,
+        ContentId,
+        SUM(totalClicks) AS TolalClicks
+    FROM selected_with_brand
+GROUP BY BrandAuthority, ContentId; 
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT selected_with_brand_content_short TO @distribution_brand_content_short
+ORDER BY BrandAuthority, ContentId ASC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+
+#CS
+
+using Microsoft.SCOPE.Types;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using ScopeRuntime;
+
+
+
+public static string ConvertWhitespacesToSingleSpace(string value)
+{
+    value = Regex.Replace(value, @"\s+", " ");
+    return value;
+}
+
+
+
+public static string TrimPunctuationCharByChar(string value)
+{
+    char[] charArray = new char[value.Length];
+    for (int i = 0; i < value.Length; i++)
+    {
+        if (char.IsPunctuation(value[i]) || value[i] == '|')
+            charArray[i] = ' ';
+        else
+            charArray[i] = value[i];
+    }
+    return ConvertWhitespacesToSingleSpace(new string(charArray).Trim());
+}
+
+#ENDCS

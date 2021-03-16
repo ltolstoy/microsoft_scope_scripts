@@ -1,0 +1,154 @@
+﻿//Script GUID:3b7fa89f-39e5-47a3-8da7-cb2e2873c402
+//Used for tracking history
+/*
+To test json reader
+It reads long json string from /shares/IndexServePlatform/RecoDataDump/%Y%m%d/NewsFeedsColumnExtentDump.tsv
+and outputs only 3 columns: BrandAuthority, ArticleProviderName, ProviderName
+Like this:
+BrandAuthority	ArticleProviderName	ProviderName(might be empty!)
+0	            Prnewsprime.com	    Prnewsprime
+0	            Citizen Tribune	    Citizen Tribune
+0	            Heyhochzeit.de	    Heyhochzeit
+0	            Uscbdvape.com	    Uscbdvape
+
+Submit with 
+startDate=(\"2020-11-21\"),endDate=(\"2020-11-22\")
+v2 - 12/1/2020 add ProviderID
+*/
+
+RESOURCE "/shares/UDC/lib/L1Library/Newtonsoft.Json.dll";
+//REFERENCE @"Newtonsoft.Json.dll"; 
+REFERENCE "/shares/UDC/lib/L1Library/Newtonsoft.Json.dll";
+REFERENCE "/shares/UDC/lib/L1Library/Relevance.ScopeLib.dll";
+USING Microsoft.SegmentRelevance.ScopeLib; 
+
+
+#DECLARE startDate string = @@startDate@@;
+#DECLARE endDate string = @@endDate@@;
+//BrandAuthority selection - adapted from reco_JoinDocFeature.script, as schema is the same, but changing the output columns
+data0 =
+    EXTRACT col0,c0l1,c0l2,itemId,jsonstr 
+    FROM
+    ///shares/IndexServePlatform/RecoDataDump/20200807/NewsFeedsColumnExtentDump.tsv
+    SPARSE STREAMSET "/shares/IndexServePlatform/RecoDataDump/"
+           PATTERN @"%Y%m%d/NewsFeedsColumnExtentDump.tsv"
+           RANGE __date = ["@@startDate@@", "@@endDate@@"]
+USING DefaultTextExtractor;
+
+docFeature = PROCESS data0 USING ItemFeatureProcessor(); //BrandAuthority:int, ArticleProviderName:string?, ProviderName:string?
+
+
+
+
+/////
+PartnerList =
+    EXTRACT ProviderName: string, 
+            Priority : int,
+            ProviderId : string,
+            Market : string
+    FROM "/shares/UDC/RnR/Users/v-letols/data_analysis/partner_list_with_names.tsv"//was @@PartnerListFile@@
+    USING DefaultTextExtractor();
+//PartnerList example:
+//ProviderName      Priority    ProviderId     Market
+//Wirtschaftwoche	4	        AA2dXT	        de-DE
+//Business Insider	4	        AA28VO	        en-US
+//Wonderwall	    11	        AA5HhRQ	        en-US
+
+PartnerListWithBrandAuthority = 
+    SELECT PartnerList.*.Except(Priority), // getting all column except Priority
+           docFeature.BrandAuthority
+FROM PartnerList 
+LEFT JOIN docFeature 
+ON PartnerList.ProviderName == docFeature.ProviderName;
+
+PartnerListWithBrandAuthority=
+SELECT DISTINCT * FROM PartnerListWithBrandAuthority;
+
+OUTPUT PartnerListWithBrandAuthority TO "/shares/UDC/RnR/Users/v-letols/partner_list_with_brand_authority_asc.tsv"
+ORDER BY BrandAuthority ASC
+USING DefaultTextOutputter(outputHeader : true);
+
+
+
+#CS
+
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
+// json processor
+     public class ItemFeatureProcessor : Processor
+    {
+        //Here I need to output only BrandAuthority,ArticleProviderName,ProviderName
+        public override Schema Produces(string[] columns, string[] args, Schema input)
+        {
+            Schema newSchema = new Schema("BrandAuthority:int,ArticleProviderName,ProviderName"); // columns that i'm looking for 
+            return newSchema;
+        }
+
+
+        public override IEnumerable<Row> Process(RowSet input, Row output, string[] args)
+        {
+            //string[] embeddNames = args[0].Split(',');  //<- this was not in old script
+            //input rowset has col0,c0l1,c0l2,itemId,jsonstr
+            foreach (Row row in input.Rows)
+            {
+                string jsonstr = row["jsonstr"].String;
+                output["ArticleProviderName"].Set(0);
+                output["ProviderName"].Set(0);
+                output["BrandAuthority"].Set(0);
+                try
+                {
+                    JObject jo = JObject.Parse(jsonstr);
+                    JToken value;
+                    if (jo.TryGetValue("ProviderName", out value))
+                    {
+                        output["ProviderName"].Set((string)value);
+                    }
+                    if (jo.TryGetValue("IntAttributes", out value))
+                    {
+                        JObject IntAttributes = value.ToObject<JObject>();
+
+                        if (IntAttributes.TryGetValue("BrandAuthority", out value))
+                        {
+                            output["BrandAuthority"].Set((int)value);
+                        }
+                    }
+                    if (jo.TryGetValue("JsonDataMap", out value))
+                    {
+                        Dictionary<string, string> jsonDataMap = value.ToObject<Dictionary<string, string>>();
+                        string displayJson;
+                        if (jsonDataMap.TryGetValue("DisplayValue", out displayJson))
+                        {
+                            JObject displayObject = JObject.Parse(displayJson);
+                            JToken v1;
+                            if (displayObject.TryGetValue("ArticleProviderName", out v1))
+                            {
+                                string str = (string)v1;
+                                output["ArticleProviderName"].Set(str);
+                            }
+                        }
+                    }
+                }
+
+                catch
+                {
+
+                }
+
+                yield return output;
+            }
+        }
+        public string ExtractVertFromUrl(string url)
+        {
+            string[] tokens = url.Split('/');
+            if (tokens.Length > 6)
+            {
+                string vertStr = tokens[4];
+                return vertStr;
+            }
+            return "";
+        }
+    }
+
+
+#ENDCS
