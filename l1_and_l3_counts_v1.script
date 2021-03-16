@@ -1,0 +1,151 @@
+﻿//Script GUID:8444c8d1-46b1-4f62-a48d-f53fbb5bed15
+//Used for tracking history
+/* <Overview>
+Script for Saheli, to count docs after L1 and after L3
+Use left table from
+https://aad.cosmos09.osdinfra.net/cosmos/MSN.DnI/shares/UDC/RnR/Users/sahelid/TS/debug/data_reqid_en-us-flight2-2020-12-13_2020-12-13.ss
+with schema: 
+RequestIdLower	string  f9dc701133d9493abf4b4a0289a2cda0
+PublisherId	    string  AA7mZ3
+ItemId	        string  BB1bTuDj
+Flight	        string  en-us-flight2
+Slice	        string  en-us  <--- it's market actually
+partner	        string  The Associated Press (AP)
+brand	        string  Associated Press
+priority        int?    1
+
+and right table , hourly files from here:
+https://aad.cosmos09.osdinfra.net/cosmos/MSN.DnI/shares/UDC/RnR/HourlyExpL1CookedV2/2020/12/MsnImpressions_2020_12_13_01.ss 
+with schema:
+UserId	string
+IdType	string
+RequestId	string  <-- need this column, but here are Capital letters , not all lower letters!
+SessionId	string
+ContentId	string  <-- need this column
+Idx	string
+ContentModule	string
+ContentModuleLineage	string
+ContentRankInModule	int?
+OrdinalLineage	string
+InventoryType	string
+ContentSource	string
+Vertical	string
+SubVertical	string
+FeedId	string
+ModuleType	string
+MUIDAge	int?
+Market	string
+RegionName	string
+CountryName	string
+Device	string
+IsInternal	int?
+IsTest	int?
+IsBot	int?
+Canvas	string      <-- need this column
+Product	string
+PageContentId	string
+PageType	string
+PageName	string
+ExperimentFlightId	string  - like msnallexpusers,muidflt118cf,muidflt260cf,muidflt261cf,audexedge2cf,pnehp3cf,platagyhp2cf,moneyhz1cf,gallery1cf,anaheim1cf,1s-bing-news,...
+FDCountry	string
+FDState	string
+FDTimezone	string
+PageViewDateTime	DateTime?
+PageDwellTime	double?
+IsClicked	int     <-- need this column
+ClickDateTime	DateTime?
+ClickDwellTime	double?
+
+With requestId, contentId & experimentFlightId contains "1s-brsageipts2"
+Left outer join
+
+Keep all columns of left table, & keep all requestId, contentId, experimentFlightId, Canvas, IsClicked
+Write Stats as tsv with schema: Publisher	TotalNumberOfDocsAfterL1	TotalNumberOfDocsAfterL3, 
+for startDate=(\"2020-12-13\"),endDate=(\"2020-12-13\")
+Aggregate by publisher & count ItemId to get NumContentAfterL1 & count ContentId to get NumContentAfterL3
+
+*/
+
+
+MODULE "/shares/PXSCosmos09.Prod/PXS.DeleteSignal.Prod/PrivacyAnnotation/PrivacyAnnotation.module";
+USING Privacy;
+
+
+#DECLARE market string = "en-us";
+#DECLARE startDate string = @@startDate@@;
+#DECLARE endDate string = @@endDate@@;
+#DECLARE oneFdHead string = ("1s-brsageipts2").ToLowerInvariant();  // now I need just one flight
+#DECLARE root       string = "/shares/UDC/RnR/Users/v-letols/l1_vs_l3_doc_count"; // changed so it saves output to my folder
+#DECLARE streamExpiry string = "25";
+
+//Output files
+#DECLARE out_root string = string.Format("{0}/{1}/{2}_{3}.out_root.ss", @root, @oneFdHead, @startDate, @endDate);
+#DECLARE statTSV_root string = string.Format("{0}/{1}/{2}_{3}.stat.tsv", @root, @oneFdHead, @startDate, @endDate);
+
+
+// Left table - from data_reqid_en-us-flight2-2020-12-13_2020-12-13.ss
+input1 = SSTREAM "/shares/UDC/RnR/Users/sahelid/TS/debug/data_reqid_en-us-flight2-2020-12-13_2020-12-13.ss";
+data1  = 
+    SELECT * FROM  input1;
+
+
+// Right table - from MsnImpressions_xx.ss
+input = SSTREAM
+    SPARSE STREAMSET "shares/UDC/RnR/HourlyExpL1CookedV2/"  
+           PATTERN @"%Y/%m/MsnImpressions_%Y_%m_%d_%h.ss"
+           RANGE __date = [@startDate, @endDate], __hour = ["00","23"];
+
+data2 =
+    SELECT 
+           RequestId.ToLowerInvariant() AS RequestId,  // converting it to lower letters
+           ContentId,
+           Canvas,
+           ExperimentFlightId,
+           IsClicked
+    FROM input
+    WHERE // String.Equals(ModuleType, @moduleType, StringComparison.OrdinalIgnoreCase) 
+       String.Equals(Market, @market, StringComparison.OrdinalIgnoreCase) 
+       && !String.IsNullOrEmpty(ExperimentFlightId)
+       && (ExperimentFlightId.Contains(@oneFdHead)) ;
+
+// Joining on RequestId
+joined_data = 
+    SELECT data1.*,
+           data2.*
+    FROM data1 
+         LEFT OUTER JOIN data2 
+         ON data1.RequestIdLower == data2.RequestId;
+// joined_data has schema:
+/*
+RequestId	string
+ContentId	string
+Canvas	string
+ExperimentFlightId	string
+IsClicked	int?
+RequestIdLower	string
+PublisherId	string
+ItemId	string
+Flight	string
+Slice	string
+partner	string
+brand	string
+priority	int?
+*/
+
+/*[Privacy.Asset.NonPersonal]
+OUTPUT joined_data TO SSTREAM @out_root
+//CLUSTERED BY RequestIdLower 
+ WITH STREAMEXPIRY @streamExpiry;
+ */
+stat = 
+    SELECT 
+        PublisherId,
+        COUNT(ItemId) AS NumContentAfterL1,
+        COUNT(ContentId) AS NumContentAfterL3
+    FROM joined_data
+GROUP BY PublisherId; 
+
+OUTPUT stat TO @statTSV_root 
+ORDER BY PublisherId DESC
+ WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);

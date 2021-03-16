@@ -1,0 +1,174 @@
+//Script GUID:8f152973-85d1-4c96-9d1d-d08777eeea25
+//Used for tracking history
+
+MODULE "/shares/PXSCosmos09.Prod/PXS.DeleteSignal.Prod/PrivacyAnnotation/PrivacyAnnotation.module";
+USING Privacy;
+
+#DECLARE startDate string = "2020-12-13";
+#DECLARE endDate string = "2020-12-13";
+#DECLARE streamExpiry string = "30";
+
+
+
+
+
+
+//inputs
+#DECLARE partnerList string = "shares/UDC/RnR/Users/sahelid/TS_Partner_List_2020.tsv";
+
+
+
+
+//outputs
+#DECLARE sampleReqids string = string.Format("/shares/UDC/RnR/Users/sahelid/TS/debug/data_reqid_en-us-flight2-{0}_{1}.tsv", @startDate, @endDate);
+#DECLARE sampleReqidsSS string = string.Format("/shares/UDC/RnR/Users/sahelid/TS/debug/data_reqid_en-us-flight2-{0}_{1}.ss", @startDate, @endDate);
+
+
+
+
+PartnerList =
+    EXTRACT partner : string,
+            brand : string,
+            country : string,
+            priority : int?,
+            providerId : string,
+            market : string
+    FROM @partnerList //was @@PartnerListFile@@
+    USING DefaultTextExtractor(skipFirstNRows: 1);
+
+
+data = 
+    EXTRACT line : string 
+    FROM SPARSE STREAMSET @"shares/indexServePlatform.upload/Reco.TrafficShaping/" 
+                PATTERN "%Y/%m/TrafficShaping_%Y_%m_%d.log_bucket%n" 
+                RANGE __date = [@startDate, @endDate], 
+                      __serialnum = ["0","3"] 
+    USING DefaultTextExtractor();
+
+data = 
+    PROCESS data 
+    PRODUCE RequestId, 
+            TraceId, 
+            Flight, 
+            Slice, 
+            PublisherId, 
+            ItemId, 
+            Probability, 
+            Throttled 
+    USING MyProcessor;
+
+joined =
+SELECT data.*,
+partner,
+brand,
+priority
+FROM data
+INNER JOIN PartnerList
+ON data.PublisherId == PartnerList.providerId;
+
+joined =
+    SELECT RequestId.ToLower() AS RequestIdLower,
+           PublisherId,
+           ItemId,
+           Flight,
+           Slice,
+partner,
+brand,
+priority
+FROM joined
+WHERE Flight == "en-us-flight2" AND Throttled == "0";
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT joined
+TO SSTREAM @sampleReqidsSS
+   WITH STREAMEXPIRY @streamExpiry;
+
+
+[Privacy.Asset.NonPersonal]
+OUTPUT joined
+TO  @sampleReqids
+   WITH STREAMEXPIRY @streamExpiry
+USING DefaultTextOutputter(outputHeader : true);
+
+
+
+#CS
+
+    
+public class MyProcessor : Processor
+{
+    public override Schema Produces(string[] requested_columns, string[] args, Schema input_schema)
+    {
+        Schema s = new Schema();
+        s.Add(new ColumnInfo("RequestId", ColumnDataType.String));
+        s.Add(new ColumnInfo("TraceId", ColumnDataType.String));
+        s.Add(new ColumnInfo("Flight", ColumnDataType.String));
+        s.Add(new ColumnInfo("Slice", ColumnDataType.String));
+        s.Add(new ColumnInfo("PublisherId", ColumnDataType.String));
+        s.Add(new ColumnInfo("ItemId", ColumnDataType.String));
+        s.Add(new ColumnInfo("Probability", ColumnDataType.String));
+        s.Add(new ColumnInfo("Throttled", ColumnDataType.String));
+        return s;
+    }
+
+    public override IEnumerable<Row> Process(RowSet input_rowset, Row output_row, string[] args)
+    {
+        //BNZEEAP000017D1,612965457,i,12/07/2020 00:00:00,RecoTrafficShaping,TrafficShaping exclude,SrcFile="RecoItemExclusionTask.cpp" SrcFunc="URP::RecoItemExclusionTask::TrafficShaping" SrcLine="433" Pid="9056" Tid="6704" TS="0x01D6CC6EF61EBCAC" String1="TraceId:1d7164e7a30f4e838afa70d298ebce42, UserId:399CFDE82E80E8EB5BE6A462FFFFFFFF, Anid:399CFDE82E80E8EB5BE6A462FFFFFFFF, 
+        //ImpressionId:DD3E59B76807446AAAF91D92ACA7F846, TSVersion:en-us-flight2, Slice:en-us, exclusion details:PublisherId:AA7mZ3, itemId:BB1bGIZg, probability:0.000000, throttled:0|PublisherId:AAf3a78, itemId:BB1bGIYR, probability:0.808081, throttled:1|
+        // ImpressionId:F65F5724BA32465FA22595A3AD30B42E, exclusion details:PublisherId:AA7mZ3, itemId:BB1b2xDC, probability:0.001241, throttled:0|PublisherId:AAjfXM, itemId:BB1b2GBg, probability:0.095672, throttled:0|"
+
+        foreach (Row input_row in input_rowset.Rows)
+        {
+            
+            string line = input_row[0].String;
+
+            var reqId = String.Empty;
+            var traceId = String.Empty;
+            var pubId = String.Empty;
+            var itemId = String.Empty;
+            var prob = String.Empty;
+            var throt = String.Empty;
+            var flight = String.Empty;
+            var slice = String.Empty;
+
+            try{
+            reqId = line.Split(new string[] {"ImpressionId:"}, StringSplitOptions.None)[1].Split(',')[0].Trim();
+    traceId = line.Split(new string[] {"TraceId:"}, StringSplitOptions.None)[1].Split(',')[0].Trim();
+            flight = line.Split(new string[] {"TSVersion:"}, StringSplitOptions.None)[1].Split(',')[0].Trim();
+            slice = line.Split(new string[] {"Slice:"}, StringSplitOptions.None)[1].Split(',')[0].Trim();
+            } catch (Exception e) {
+                continue;
+            }
+
+
+            if (!string.IsNullOrEmpty(reqId)) {
+                var b1 = line.Split(new string[] {"exclusion details:"}, StringSplitOptions.None)[1].Split(new string[] {"|\""}, StringSplitOptions.None)[0];
+
+    foreach (string d in b1.Split(new string[] {"|"}, StringSplitOptions.None)) {
+                    try {
+    var d1 = d.Split(',');
+    pubId = d1[0].Trim().Split(new string[] {":"}, StringSplitOptions.None)[1];
+                    itemId = d1[1].Trim().Split(new string[] {":"}, StringSplitOptions.None)[1];
+                    prob = d1[2].Trim().Split(new string[] {":"}, StringSplitOptions.None)[1];
+                    throt = d1[3].Trim().Split(new string[] {":"}, StringSplitOptions.None)[1];
+
+                    output_row["RequestId"].Set(reqId);
+                    output_row["TraceId"].Set(traceId);
+                    output_row["Flight"].Set(flight);
+                    output_row["Slice"].Set(slice);
+                    output_row["PublisherId"].Set(pubId);
+                    output_row["ItemId"].Set(itemId);
+                    output_row["Probability"].Set(prob);
+                    output_row["Throttled"].Set(throt);
+                    } catch (Exception e) {
+                        Console.WriteLine(d);
+                    }
+                    yield return output_row;
+    }
+            }
+        }
+    }
+}
+
+#ENDCS
